@@ -1,0 +1,40 @@
+# ── Credentials & secrets ──────────────────────────────────────
+.streamlit/secrets.toml
+secrets.toml
+*.json
+
+# ── Python virtual environment ─────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Streamlit cache ────────────────────────────────────────────
+.streamlit/cache/
+
+# ── Diagnostic / scratch scripts (not needed in production) ───
+diagnose_sheet.py
+diagnose_episodes.py
+full_audit.py
+verify_eps.py
+seed_data.py
+
+# ── OS files ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor files ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Build / dist ───────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
