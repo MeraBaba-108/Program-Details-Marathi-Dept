@@ -1,0 +1,850 @@
+import { useState, useMemo, useEffect } from 'react';
+import { Routes, Route, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ProductionRecord } from './data';
+import { useProductionData } from './useProductionData';
+import { AuthLayout } from './components/auth/AuthLayout';
+import { Login } from './components/auth/Login';
+import { Register } from './components/auth/Register';
+import { ForgotPassword } from './components/auth/ForgotPassword';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
+
+export function Dashboard() {
+  const navigate = useNavigate();
+  const [route, setRoute] = useState('home');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  const { 
+    data: records, 
+    loading, 
+    error, 
+    refresh, 
+    lastSyncTime,
+    addRecord,
+    updateRecord,
+    deleteRecord
+  } = useProductionData();
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<ProductionRecord | null>(null);
+  const [modalForm, setModalForm] = useState({
+    srNo: '',
+    programTitle: '',
+    contentType: '',
+    subject: '',
+    language: '',
+    logNo: '',
+    episodes: 0,
+    shootingDateDisplay: ''
+  });
+
+  useEffect(() => {
+    if (sidebarOpen) {
+      document.body.classList.add('sidebar-open');
+    } else {
+      document.body.classList.remove('sidebar-open');
+    }
+  }, [sidebarOpen]);
+
+  const [filters, setFilters] = useState({ search: '', language: 'all', type: 'all', year: 'all' });
+  const [searchTimer, setSearchTimer] = useState<any>(null);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const filteredData = useMemo(() => {
+    return records.filter(row => {
+      if (filters.language !== 'all' && (row.language || 'Unspecified') !== filters.language) return false;
+      if (filters.type !== 'all' && (row.contentType || 'Unspecified') !== filters.type) return false;
+      if (filters.year !== 'all' && (row.year || 'No Year') !== filters.year) return false;
+      
+      if (filters.search) {
+        const query = filters.search.toLowerCase();
+        const haystack = [row.programTitle, row.subject, row.contentType, row.logNo, row.language, row.year].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [records, filters]);
+
+  const [currentMode, setCurrentMode] = useState('home');
+  const [currentTitle, setCurrentTitle] = useState('');
+  const [currentSub, setCurrentSub] = useState('');
+  const [currentBreadcrumb, setCurrentBreadcrumb] = useState('');
+  const [currentRows, setCurrentRows] = useState<ProductionRecord[]>([]);
+  const [currentContext, setCurrentContext] = useState<any>(null);
+  const [sortDesc, setSortDesc] = useState(true);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/login');
+  };
+
+  // Keep currentRows updated in real-time when records change in background
+  useEffect(() => {
+    if (currentContext) {
+      const { type, value } = currentContext;
+      const updatedRows = filteredData.filter(r => {
+        if (type === 'show') return (r.programTitle || 'Blank Program Title') === value;
+        if (type === 'language') return (r.language || 'Unspecified') === value;
+        if (type === 'subject') return (r.subject || 'Unspecified') === value;
+        if (type === 'year') return (r.year || 'No Year') === value;
+        return (r as any)[type] === value;
+      });
+      setCurrentRows(updatedRows);
+    } else if (route === 'episodes' || route === 'details') {
+      setCurrentRows(filteredData);
+    }
+  }, [records, filteredData, currentContext, route]);
+
+  const handleModalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (editingRecord && editingRecord.rowNumber) {
+        await updateRecord(editingRecord.rowNumber, modalForm);
+      } else {
+        await addRecord(modalForm);
+      }
+      setIsModalOpen(false);
+      setEditingRecord(null);
+    } catch (err) {
+      alert('Failed to save record. Check server logs.');
+    }
+  };
+
+  const handleDelete = async (rowNumber: number) => {
+    if (window.confirm('Are you sure you want to permanently delete this production record from the Google Sheet?')) {
+      try {
+        await deleteRecord(rowNumber);
+      } catch (err) {
+        alert('Failed to delete record. Check server logs.');
+      }
+    }
+  };
+
+  const openAddModal = () => {
+    setEditingRecord(null);
+    setModalForm({
+      srNo: String(records.length + 1),
+      programTitle: '',
+      contentType: '',
+      subject: '',
+      language: 'Marathi',
+      logNo: `LOG-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      episodes: 1,
+      shootingDateDisplay: new Date().toLocaleDateString('en-GB') // DD/MM/YYYY
+    });
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (rec: ProductionRecord) => {
+    setEditingRecord(rec);
+    setModalForm({
+      srNo: rec.srNo || '',
+      programTitle: rec.programTitle || '',
+      contentType: rec.contentType || '',
+      subject: rec.subject || '',
+      language: rec.language || '',
+      logNo: rec.logNo || '',
+      episodes: rec.episodes || 0,
+      shootingDateDisplay: rec.shootingDateDisplay || ''
+    });
+    setIsModalOpen(true);
+  };
+
+
+  const updateSearch = (val: string) => {
+    setIsSearching(true);
+    if (searchTimer) clearTimeout(searchTimer);
+    setSearchTimer(setTimeout(() => setIsSearching(false), 320));
+    setFilters(f => ({ ...f, search: val }));
+  };
+
+  const clearFilters = () => {
+    setFilters({ search: '', language: 'all', type: 'all', year: 'all' });
+    setIsSearching(true);
+    setTimeout(() => setIsSearching(false), 320);
+  };
+
+  // Navigations
+  const navigateTo = (newRoute: string) => {
+    setRoute(newRoute);
+    setCurrentMode(newRoute);
+    setSidebarOpen(false);
+    
+    if (newRoute === 'episodes') {
+      setCurrentMode('table');
+      setCurrentTitle('All Episode List');
+      setCurrentSub(`All visible entries • ${filteredData.length} entries`);
+      setCurrentBreadcrumb('Home / Total Episodes');
+      setCurrentRows(filteredData);
+      setCurrentContext(null);
+    } else if (newRoute === 'details') {
+      setCurrentMode('table');
+      setCurrentTitle('All Production Details');
+      setCurrentSub(`Date-wise full master table • ${filteredData.length} entries`);
+      setCurrentBreadcrumb('Home / All Production Details');
+      setCurrentRows(filteredData);
+      setCurrentContext(null);
+    }
+  };
+
+  const viewTable = (title: string, sub: string, breadcrumb: string, rows: ProductionRecord[], context: any) => {
+    setCurrentMode('table');
+    setCurrentTitle(title);
+    setCurrentSub(sub);
+    setCurrentBreadcrumb(breadcrumb);
+    setCurrentRows(rows);
+    setCurrentContext(context);
+    setSidebarOpen(false);
+  };
+
+  const uniqueShows = useMemo(() => Array.from(new Set(records.map(r => r.programTitle || 'Blank Program Title'))), [records]);
+  const uniqueSubjects = useMemo(() => Array.from(new Set(records.map(r => r.subject || 'Unspecified'))), [records]);
+  const uniqueContentTypes = useMemo(() => Array.from(new Set(records.map(r => r.contentType || 'Unspecified'))), [records]);
+  
+  const showCount = uniqueShows.length;
+  const subjectCount = uniqueSubjects.length;
+  const typeCount = uniqueContentTypes.length;
+  const epCount = filteredData.reduce((sum, row) => sum + (row.episodes || 0), 0);
+  const entryCount = filteredData.length;
+
+  // Header content based on route
+  const getHeaderMeta = () => {
+    switch(route) {
+      case 'dashboard': return { eyebrow: 'Dashboard', title: 'Production Analytics', sub: 'A separate visual dashboard for show-wise, language-wise, subject-wise and year-wise production tracking.' };
+      case 'shows': return { eyebrow: 'Total Shows', title: 'Show Directory', sub: 'Select any program to open all related records in a clean table format.' };
+      case 'episodes': return { eyebrow: 'Total Episodes', title: 'All Episode List', sub: 'Every production entry from the live sheet with log number, subject, language and shooting date.' };
+      case 'subjects': return { eyebrow: 'Subjects', title: 'Subject Directory', sub: 'Choose a topic to view all matching productions in table format.' };
+      case 'types': return { eyebrow: 'Content Type', title: 'Content Type Directory', sub: 'Talk shows, singles, songs, dance and other content grouped from the live sheet.' };
+      case 'details': return { eyebrow: 'All Production Details', title: 'Complete Master Table', sub: 'Date-wise complete production details from the live Google Sheet.' };
+      default: return { eyebrow: 'Home Page', title: 'Marathi Production Library', sub: 'A Google-Sheet connected record system for every show, subject, log number and episode detail.' };
+    }
+  };
+  const headerMeta = getHeaderMeta();
+
+  // Rendering Helpers
+  const renderBars = (groups: Record<string, number>, clickableType: string, maxItems: number = 10, compact: boolean = false) => {
+    const sorted = Object.entries(groups).sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, maxItems);
+    if (!sorted.length) return <div className="empty-state"><p>No data</p></div>;
+    const maxVal = Math.max(...sorted.map(s => s[1]), 1);
+
+    return (
+      <div className={compact ? "compact-list" : "bar-list"}>
+        {sorted.map(([key, val]) => (
+          <div key={key} className={compact ? "compact-item" : "bar-item"} style={{ cursor: clickableType ? 'pointer' : 'default' }} onClick={() => {
+            if (clickableType) {
+              const rows = filteredData.filter(r => {
+                if (clickableType === 'show') return (r.programTitle || 'Blank Program Title') === key;
+                if (clickableType === 'language') return (r.language || 'Unspecified') === key;
+                if (clickableType === 'subject') return (r.subject || 'Unspecified') === key;
+                if (clickableType === 'year') return (r.year || 'No Year') === key;
+                return false;
+              });
+              viewTable(key, `${rows.length} entries`, `Dashboard / ${clickableType} / ${key}`, rows, { type: clickableType, value: key });
+            }
+          }}>
+            <div className={compact ? "compact-meta" : "bar-meta"}>
+              <strong>{key || 'Unknown'}</strong>
+              <span>{val}</span>
+            </div>
+            <div className="track">
+              <div className="fill" style={{ width: `${(val / maxVal) * 100}%` }}></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Compute groupings dynamically based on filteredData
+  const getGroupings = (keyFn: (r: ProductionRecord) => string) => {
+    const counts: Record<string, { entries: number, episodes: number }> = {};
+    filteredData.forEach(r => {
+      const k = keyFn(r) || 'Unknown';
+      if(!counts[k]) counts[k] = { entries: 0, episodes: 0 };
+      counts[k].entries += 1;
+      counts[k].episodes += (r.episodes || 0);
+    });
+    return Object.entries(counts).sort((a, b) => b[1].episodes - a[1].episodes || a[0].localeCompare(b[0]));
+  };
+
+  const showGroups = getGroupings(r => r.programTitle || 'Blank Program Title');
+  const subjectGroups = getGroupings(r => r.subject || 'Unspecified');
+  const typeGroups = getGroupings(r => r.contentType || 'Unspecified');
+
+  // Group sum for dashboard bars
+  const groupSum = (keyFn: (r: ProductionRecord) => string) => {
+    const res: Record<string, number> = {};
+    filteredData.forEach(r => {
+      const k = keyFn(r) || 'Unknown';
+      res[k] = (res[k] || 0) + (r.episodes || 0);
+    });
+    return res;
+  };
+
+  const uniqueYears = useMemo(() => Array.from(new Set(records.map(r => r.year || 'No Year'))).sort((a,b) => Number(b) - Number(a)), [records]);
+  const uniqueLanguages = useMemo(() => Array.from(new Set(records.map(r => r.language || 'Unspecified'))).filter(l => l !== 'Unspecified'), [records]);
+
+  // Sort current rows
+  const sortedTableRows = useMemo(() => {
+    return [...currentRows].sort((a, b) => {
+      const dateA = a.shootingDate ? a.shootingDate.getTime() : 0;
+      const dateB = b.shootingDate ? b.shootingDate.getTime() : 0;
+      return sortDesc ? dateB - dateA : dateA - dateB;
+    });
+  }, [currentRows, sortDesc]);
+
+  return (
+    <div className={`app-layout ${isSearching ? 'searching' : ''}`} id="appLayout">
+      <aside className={`glass-sidebar ${sidebarOpen ? 'open' : ''}`} aria-label="Main navigation">
+        <div className="brand-block">
+          <div className="brand-mark">म</div>
+          <div>
+            <span>Godlywood Studio</span>
+            <strong>Production OS</strong>
+            <small>Marathi & Graphics Dept.</small>
+          </div>
+        </div>
+
+        <nav className="side-nav">
+          <p className="nav-label">Workspace</p>
+          <button className={`nav-item ${route === 'home' ? 'active' : ''}`} onClick={() => navigateTo('home')}>
+            <span className="nav-icon">⌂</span>
+            <span className="nav-text">Home Page</span>
+            <em>Start</em>
+          </button>
+          <button className={`nav-item ${route === 'dashboard' ? 'active' : ''}`} onClick={() => navigateTo('dashboard')}>
+            <span className="nav-icon">◈</span>
+            <span className="nav-text">Dashboard</span>
+            <em>Live</em>
+          </button>
+
+          <p className="nav-label">Production Sections</p>
+          <button className={`nav-item ${route === 'shows' ? 'active' : ''}`} onClick={() => navigateTo('shows')}>
+            <span className="nav-icon">▦</span>
+            <span className="nav-text">Total Shows</span>
+            <em>{uniqueShows.length}</em>
+          </button>
+          <button className={`nav-item ${route === 'episodes' ? 'active' : ''}`} onClick={() => navigateTo('episodes')}>
+            <span className="nav-icon">☰</span>
+            <span className="nav-text">Total Episodes</span>
+            <em>{epCount}</em>
+          </button>
+          <button className={`nav-item ${route === 'subjects' ? 'active' : ''}`} onClick={() => navigateTo('subjects')}>
+            <span className="nav-icon">◎</span>
+            <span className="nav-text">Subjects</span>
+            <em>{uniqueSubjects.length}</em>
+          </button>
+          <button className={`nav-item ${route === 'types' ? 'active' : ''}`} onClick={() => navigateTo('types')}>
+            <span className="nav-icon">◐</span>
+            <span className="nav-text">Content Type</span>
+            <em>{uniqueContentTypes.length}</em>
+          </button>
+          <button className={`nav-item ${route === 'details' ? 'active' : ''}`} onClick={() => navigateTo('details')}>
+            <span className="nav-icon">⌗</span>
+            <span className="nav-text">All Production Details</span>
+            <em>{filteredData.length}</em>
+          </button>
+        </nav>
+
+        <div className="master-chip">
+          <span className="pulse-dot"></span>
+          <div>
+            <strong>Master Sheet</strong>
+            <small>
+              {loading ? 'Syncing...' : lastSyncTime ? `Live sync active • ${lastSyncTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'})}` : 'Not synced'}
+            </small>
+          </div>
+        </div>
+      </aside>
+
+      <div className="content-area">
+        <header className="topbar">
+          <button className="mobile-menu" aria-label="Open navigation" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</button>
+          <div>
+            <p className="eyebrow">{headerMeta.eyebrow}</p>
+            <h1>{headerMeta.title}</h1>
+            <p className="subline">{headerMeta.sub}</p>
+            {error && <p style={{ color: '#ff6b8a', marginTop: '10px' }}>Error: {error}</p>}
+          </div>
+          <div className="top-actions">
+            <div className="mini-kpi">
+              <span>{filteredData.length}</span>
+              <small>visible entries</small>
+            </div>
+            <button className="logout-btn" title="Logout" onClick={handleLogout}>Logout</button>
+          </div>
+        </header>
+
+        <section className="command-bar glass-panel" aria-label="Filters">
+          <label className="search-box">
+            <span className="search-icon">⌕</span>
+            <input type="search" placeholder="Search program, subject, log number, date…" value={filters.search} onChange={e => updateSearch(e.target.value)} />
+            <small>{filteredData.length} results</small>
+          </label>
+          <label className="select-wrap">
+            <span>Language</span>
+            <select value={filters.language} onChange={e => setFilters(f => ({ ...f, language: e.target.value }))}>
+              <option value="all">All</option>
+              {uniqueLanguages.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </label>
+          <label className="select-wrap">
+            <span>Content Type</span>
+            <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>
+              <option value="all">All</option>
+              {uniqueContentTypes.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="select-wrap compact-select">
+            <span>Year</span>
+            <select value={filters.year} onChange={e => setFilters(f => ({ ...f, year: e.target.value }))}>
+              <option value="all">All</option>
+              {uniqueYears.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </label>
+          <button className="ghost-btn" onClick={() => { setIsSearching(true); refresh(); setTimeout(() => setIsSearching(false), 500); }} disabled={loading}>
+            {loading ? 'Syncing...' : 'Sync Sheet'}
+          </button>
+          <button className="ghost-btn" onClick={openAddModal} style={{ borderColor: 'rgba(135, 216, 209, 0.4)', color: '#87d8d1' }}>
+            + Add Record
+          </button>
+          <button className="ghost-btn" onClick={clearFilters}>Clear</button>
+        </section>
+
+        <main className="screen-stage">
+          {currentMode === 'home' && (
+            <section className="screen active-screen">
+              <div className="home-hero">
+                <div>
+                  <p className="eyebrow" style={{ color: 'var(--cyan)' }}>Production Library</p>
+                  <h2 style={{ color: '#fff', textShadow: '0 0 20px rgba(0, 229, 255, 0.3)' }}>Marathi Production OS</h2>
+                  <p className="summary-line">Live synchronization with Master Sheet.</p>
+                  <div className="live-pill" style={{ marginTop: '20px' }}><span></span> Google Sheet connected</div>
+                </div>
+                <div className="stats-cubes">
+                  <div className="cube">
+                    <span className="cube-value">{entryCount}</span>
+                    <span className="cube-label">Entries</span>
+                  </div>
+                  <div className="cube">
+                    <span className="cube-value">{showCount}</span>
+                    <span className="cube-label">Shows</span>
+                  </div>
+                  <div className="cube">
+                    <span className="cube-value">{epCount}</span>
+                    <span className="cube-label">Episodes</span>
+                  </div>
+                </div>
+              </div>
+              <motion.div 
+                className="main-buttons"
+                initial="hidden"
+                animate="visible"
+                variants={{
+                  hidden: { opacity: 0 },
+                  visible: { opacity: 1, transition: { staggerChildren: 0.1 } }
+                }}
+              >
+                <motion.button variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="main-card hover-lift card-blue" onClick={() => navigateTo('shows')}>
+                  <div>
+                    <span className="card-index">01</span>
+                    <strong>Total Shows</strong>
+                    <p>Program names with total episode count</p>
+                  </div>
+                  <em className="number"><span>{showCount}</span> shows</em>
+                </motion.button>
+                <motion.button variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="main-card hover-lift card-purple" onClick={() => navigateTo('episodes')}>
+                  <div>
+                    <span className="card-index">02</span>
+                    <strong>Total Episodes</strong>
+                    <p>Complete episode / log list</p>
+                  </div>
+                  <em className="number"><span>{epCount}</span> episodes</em>
+                </motion.button>
+                <motion.button variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="main-card hover-lift card-emerald" onClick={() => navigateTo('subjects')}>
+                  <div>
+                    <span className="card-index">03</span>
+                    <strong>Subjects</strong>
+                    <p>Topic-wise production records</p>
+                  </div>
+                  <em className="number"><span>{subjectCount}</span> subjects</em>
+                </motion.button>
+                <motion.button variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="main-card hover-lift card-orange" onClick={() => navigateTo('types')}>
+                  <div>
+                    <span className="card-index">04</span>
+                    <strong>Content Type</strong>
+                    <p>Talk show, single, song, dance and more</p>
+                  </div>
+                  <em className="number"><span>{typeCount}</span> types</em>
+                </motion.button>
+                <motion.button variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="main-card hover-lift card-cyan" onClick={() => navigateTo('details')}>
+                  <div>
+                    <span className="card-index">05</span>
+                    <strong>All Production Details</strong>
+                    <p>Date-wise live sheet table</p>
+                  </div>
+                  <em className="number"><span>{entryCount}</span> entries</em>
+                </motion.button>
+              </motion.div>
+            </section>
+          )}
+
+          {currentMode === 'dashboard' && (
+            <section className="screen active-screen">
+              <div className="dashboard-head">
+                <div>
+                  <p className="eyebrow">Dashboard</p>
+                  <h2>Production overview</h2>
+                  <p className="summary-line">Show-wise, language-wise, subject-wise and year-wise analytics from the live Google Sheet.</p>
+                </div>
+              </div>
+              <motion.div 
+                className="kpi-grid"
+                initial="hidden" animate="visible"
+                variants={{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } }}
+              >
+                <motion.article variants={{ hidden: { scale: 0.9, opacity: 0 }, visible: { scale: 1, opacity: 1 } }} className="kpi-card glass-panel hover-lift"><small>Visible Entries</small><strong>{entryCount}</strong></motion.article>
+                <motion.article variants={{ hidden: { scale: 0.9, opacity: 0 }, visible: { scale: 1, opacity: 1 } }} className="kpi-card glass-panel hover-lift"><small>Total Episodes</small><strong>{epCount}</strong></motion.article>
+                <motion.article variants={{ hidden: { scale: 0.9, opacity: 0 }, visible: { scale: 1, opacity: 1 } }} className="kpi-card glass-panel hover-lift"><small>Total Shows</small><strong>{showCount}</strong></motion.article>
+                <motion.article variants={{ hidden: { scale: 0.9, opacity: 0 }, visible: { scale: 1, opacity: 1 } }} className="kpi-card glass-panel hover-lift"><small>Subjects</small><strong>{subjectCount}</strong></motion.article>
+                <motion.article variants={{ hidden: { scale: 0.9, opacity: 0 }, visible: { scale: 1, opacity: 1 } }} className="kpi-card glass-panel hover-lift"><small>Content Types</small><strong>{typeCount}</strong></motion.article>
+              </motion.div>
+              <div className="dashboard-grid">
+                <article className="panel wide glass-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Show-wise Episodes</h3>
+                      <small>Descending order</small>
+                    </div>
+                    <span className="panel-glow">Top 12</span>
+                  </div>
+                  {renderBars(groupSum(r => r.programTitle || 'Blank Program Title'), 'show', 12)}
+                </article>
+                <article className="panel glass-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Language Wise</h3>
+                      <small>Episode count</small>
+                    </div>
+                  </div>
+                  {renderBars(groupSum(r => r.language || 'Unspecified'), 'language', 8, true)}
+                </article>
+                <article className="panel glass-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Subject Wise</h3>
+                      <small>Top subjects</small>
+                    </div>
+                  </div>
+                  {renderBars(groupSum(r => r.subject || 'Unspecified'), 'subject', 10, true)}
+                </article>
+                <article className="panel wide glass-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Year Wise</h3>
+                      <small>Shooting date</small>
+                    </div>
+                  </div>
+                  {renderBars(groupSum(r => r.year || 'No Year'), 'year', 10, true)}
+                </article>
+              </div>
+            </section>
+          )}
+
+          {['shows', 'subjects', 'types'].includes(currentMode) && (
+            <section className="screen active-screen">
+              <div className="list-top">
+                <button className="ghost-btn" onClick={() => navigateTo('home')}>← Home</button>
+                <div>
+                  <p className="eyebrow">Home / {headerMeta.eyebrow}</p>
+                  <h2>{headerMeta.eyebrow}</h2>
+                  <p className="summary-line">
+                    {currentMode === 'shows' ? `${showGroups.length} shows found. Click any program to view all records in table format.` :
+                     currentMode === 'subjects' ? `${subjectGroups.length} subjects found. Click any topic to see the episode list table.` :
+                     `${typeGroups.length} content types found. Click any type to view its table.`}
+                  </p>
+                </div>
+              </div>
+              <motion.div 
+                className="group-area"
+                initial="hidden" animate="visible"
+                variants={{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.05 } } }}
+              >
+                <div className="group-grid">
+                  {(currentMode === 'shows' ? showGroups : currentMode === 'subjects' ? subjectGroups : typeGroups).map(([name, data]) => (
+                    <motion.button 
+                      key={name} 
+                      variants={{ hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0 } }} 
+                      className="group-card hover-lift glass-panel" 
+                      onClick={() => {
+                        const prop = currentMode === 'shows' ? 'programTitle' : currentMode === 'subjects' ? 'subject' : 'contentType';
+                        const rows = filteredData.filter(r => (r as any)[prop] === name || (!r[prop] && name === 'Blank Program Title'));
+                        viewTable(name, `${rows.length} entries • ${data.episodes} episodes`, `Home / ${headerMeta.eyebrow} / ${name}`, rows, { type: currentMode === 'shows' ? 'show' : prop, value: name });
+                      }}
+                    >
+                      <strong>{name}</strong>
+                      <small>{data.entries} entries</small>
+                      <span>{data.episodes} episodes</span>
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+            </section>
+          )}
+
+          {currentMode === 'table' && (
+            <section className="screen active-screen">
+              <div className="list-top">
+                <button className="ghost-btn" onClick={() => navigateTo('home')}>← Home</button>
+                <div>
+                  <p className="eyebrow">{currentBreadcrumb}</p>
+                  <h2>{currentTitle}</h2>
+                  <p className="summary-line">{currentSub}</p>
+                </div>
+              </div>
+
+              <div className="table-card glass-panel">
+                {!sortedTableRows.length ? (
+                  <div className="empty-state">
+                    <div className="empty-orbit"></div>
+                    <h3>No records found</h3>
+                    <p>Try clearing filters or check the Google Sheet values.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="table-head">
+                      <div>
+                        <h3>{currentTitle}</h3>
+                        <p>{currentSub || `${sortedTableRows.length} entries`}</p>
+                      </div>
+                      <div className="table-actions">
+                        <button className="ghost-btn" onClick={() => setSortDesc(!sortDesc)}>Date {sortDesc ? '↓' : '↑'}</button>
+                        <button className="ghost-btn" onClick={() => window.print()}>Print</button>
+                      </div>
+                    </div>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Sr. No</th>
+                            <th>Program Title</th>
+                            <th>Content Type</th>
+                            <th>Subject</th>
+                            <th>Language</th>
+                            <th>Log No.</th>
+                            <th>No. of Eps</th>
+                            <th>Shooting Date</th>
+                            <th style={{ width: '130px' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <motion.tbody
+                          initial="hidden"
+                          animate="visible"
+                          variants={{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.03 } } }}
+                        >
+                          {sortedTableRows.map((row) => (
+                            <motion.tr key={row.id} variants={{ hidden: { opacity: 0, x: -10 }, visible: { opacity: 1, x: 0 } }}>
+                              <td>{row.srNo || '—'}</td>
+                              <td className="program-cell">{row.programTitle || 'Blank Program Title'}</td>
+                              <td>{row.contentType || '—'}</td>
+                              <td>{row.subject || '—'}</td>
+                              <td>{row.language || '—'}</td>
+                              <td><span className="log-chip">{row.logNo || '—'}</span></td>
+                              <td><span className="badge">{row.episodes || 0}</span></td>
+                              <td>{row.shootingDateDisplay || '—'}</td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button 
+                                    className="ghost-btn hover-lift" 
+                                    style={{ height: '28px', padding: '0 8px', fontSize: '11px', borderRadius: '8px' }}
+                                    onClick={() => openEditModal(row)}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button 
+                                    className="ghost-btn hover-lift" 
+                                    style={{ height: '28px', padding: '0 8px', fontSize: '11px', borderRadius: '8px', borderColor: 'rgba(228, 138, 154, 0.4)', color: '#e48a9a' }}
+                                    onClick={() => row.rowNumber && handleDelete(row.rowNumber)}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </motion.tr>
+                          ))}
+                        </motion.tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+        </main>
+        
+        {/* Modal Dialog Form */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+            <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/[0.08] shadow-2xl" 
+                 style={{ 
+                   background: 'linear-gradient(180deg, #121c29 0%, #0d1520 100%)',
+                   boxShadow: '0 24px 70px rgba(0, 0, 0, 0.5)'
+                 }}>
+              <div className="px-5 py-4 border-b border-white/[0.05] flex items-center justify-between">
+                <h3 className="text-base font-bold text-white">
+                  {editingRecord ? 'Edit Production Record' : 'Add New Production Record'}
+                </h3>
+                <button 
+                  onClick={() => setIsModalOpen(false)} 
+                  className="text-slate-400 hover:text-white transition-all text-xl"
+                >
+                  &times;
+                </button>
+              </div>
+              <form onSubmit={handleModalSubmit} className="p-5 flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Sr. No
+                    <input 
+                      type="text" 
+                      value={modalForm.srNo} 
+                      onChange={e => setModalForm({...modalForm, srNo: e.target.value})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Log No.
+                    <input 
+                      type="text" 
+                      value={modalForm.logNo} 
+                      onChange={e => setModalForm({...modalForm, logNo: e.target.value})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                </div>
+                
+                <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                  Program Title
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Program Title"
+                    value={modalForm.programTitle} 
+                    onChange={e => setModalForm({...modalForm, programTitle: e.target.value})}
+                    className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                    required
+                  />
+                </label>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Content Type
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Talk Show"
+                      value={modalForm.contentType} 
+                      onChange={e => setModalForm({...modalForm, contentType: e.target.value})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Language
+                    <input 
+                      type="text" 
+                      value={modalForm.language} 
+                      onChange={e => setModalForm({...modalForm, language: e.target.value})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                </div>
+
+                <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                  Subject
+                  <input 
+                    type="text" 
+                    placeholder="Topic of episode"
+                    value={modalForm.subject} 
+                    onChange={e => setModalForm({...modalForm, subject: e.target.value})}
+                    className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                    required
+                  />
+                </label>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Episodes
+                    <input 
+                      type="number" 
+                      value={modalForm.episodes} 
+                      onChange={e => setModalForm({...modalForm, episodes: parseInt(e.target.value, 10) || 0})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-300 font-semibold uppercase tracking-wider font-sans">
+                    Shooting Date
+                    <input 
+                      type="text" 
+                      placeholder="DD/MM/YYYY"
+                      value={modalForm.shootingDateDisplay} 
+                      onChange={e => setModalForm({...modalForm, shootingDateDisplay: e.target.value})}
+                      className="h-10 px-3 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-[#87d8d1]/50 focus:bg-white/[0.05] outline-none text-white text-[13px] transition-all"
+                      required
+                    />
+                  </label>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-4 font-sans">
+                  <button 
+                    type="button" 
+                    onClick={() => setIsModalOpen(false)} 
+                    className="h-10 px-4 rounded-xl border border-white/[0.08] text-slate-300 hover:bg-white/[0.03] hover:text-white transition-all text-[13px]"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="h-10 px-5 rounded-xl text-black font-bold hover:brightness-110 transition-all text-[13px]"
+                    style={{ background: 'linear-gradient(135deg, #87d8d1, #b9abe8)' }}
+                  >
+                    {editingRecord? 'Save': 'Create'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  // Global resize listener for sidebar if needed
+  useEffect(() => {
+    const handleResize = () => {
+      if(window.innerWidth > 860) document.body.classList.remove('sidebar-open');
+    }
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return (
+    <Routes>
+      <Route path="/login" element={<AuthLayout><Login /></AuthLayout>} />
+      <Route path="/register" element={<AuthLayout><Register /></AuthLayout>} />
+      <Route path="/forgot-password" element={<AuthLayout><ForgotPassword /></AuthLayout>} />
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<Dashboard />} />
+      </Route>
+    </Routes>
+  );
+}
+
+
+
+
